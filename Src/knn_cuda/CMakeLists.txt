@@ -17,8 +17,7 @@ cuda_add_executable( knn_cuda
 ${HEADERS}
 knn_cuda.cu
 OPTIONS --cudart=shared  -lineinfo -arch sm_52 -use_fast_math
-DEBUG -Xptxas -v -g -G 
-)
+DEBUG -Xptxas -v -g -G)
 
 target_link_libraries( 
 knn_cuda
