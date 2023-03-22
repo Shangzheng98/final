@@ -5,8 +5,8 @@
 #include <helper_cuda.h>
 #include <chrono>
 #define N 262144 // number of data points
-#define D 40 // dimension of each data point
-#define K 10 // number of nearest neighbors
+#define D 8 // dimension of each data point
+#define K 5 // number of nearest neighbors
 #define BLOCK_SIZE_DIS 8 // number of threads per block for distance calculation
 #define BLOCK_SIZE_KNN 1 // number of threads per block for knn calculation
 
@@ -119,11 +119,19 @@ __global__ void mergeBlocks_kernel(int* indices, float* distances, int* ind_temp
 * @param b The second number after swapping.
 *
 */
-__device__ void swap(float* a, float* b) {
+__device__ void swap_float(float* a, float* b) {
     float temp = *a;
     *a = *b;
     *b = temp;
 }
+
+
+__device__ void swap_int(int* a, int* b) {
+    int temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
 
 /**
 * This CUDA kernel implement a bitonic sort.
@@ -140,7 +148,7 @@ __device__ void swap(float* a, float* b) {
 * @NOTE: The total number of the data points must be a power of 2.
 *
 */
-__global__ void Bitonic_Sort_kernel(float* in, int length, int step, int num_points) {
+__global__ void Bitonic_Sort_kernel(float* in, int* indices, int length, int step, int num_points) {
     unsigned int idx;
     idx = threadIdx.x + blockDim.x * blockIdx.x;
 
@@ -148,13 +156,15 @@ __global__ void Bitonic_Sort_kernel(float* in, int length, int step, int num_poi
         int index = idx | step; //Find the pair index of the element we want to compare
         if ((idx & length) == 0) { //ascending
             if (in[idx] > in[index]) {
-                swap(&in[idx], &in[index]);
+                swap_float(&in[idx], &in[index]);
+                swap_int(&indices[idx], &indices[index]);
             }
         }
 
         else { //descending
             if (in[idx] < in[index]) {
-                swap(&in[idx], &in[index]);
+                swap_float(&in[idx], &in[index]);
+                swap_int(&indices[idx], &indices[index]);
             }
         }
     }
@@ -312,8 +322,10 @@ int main() {
     cudaMalloc(&d_ind_temp, N * sizeof(int));
 
     // (DEVICE) Allocate memory for indices
-    int* d_indices;
-    cudaMalloc(&d_indices, N * sizeof(int));
+    int* d_indices_merge;
+    int* d_indices_bitonic;
+    cudaMalloc(&d_indices_merge, N * sizeof(int));
+    cudaMalloc(&d_indices_bitonic, N * sizeof(int));
 
     /*
     // Allocate memory for unsorted distances
@@ -326,7 +338,8 @@ int main() {
     for (int i = 0; i < N; i++) {
         indices[i] = i;
     }
-    cudaMemcpy(d_indices, indices, N * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_indices_merge, indices, N * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_indices_bitonic, indices, N * sizeof(int), cudaMemcpyHostToDevice);
 
     // (DEVICE) Allocate memory for distances
     float* d_distances_merge;
@@ -337,10 +350,11 @@ int main() {
     // (HOST) Allocate memory for sorted distances and indices computed by GPU
     float* distances_sorted_merge = (float*)malloc(N * sizeof(float));
     float* distances_sorted_bitonic = (float*)malloc(N * sizeof(float));
-    int* indices_sorted = (int*)malloc(N * sizeof(int));
+    int* indices_sorted_merge = (int*)malloc(N * sizeof(int));
+    int* indices_sorted_bitonic = (int*)malloc(N * sizeof(int));
 
     // (HOST) Allocate memory for sorted distances and indices computed by CPU
-    float* distances_sorted_CPU = (float*)malloc(N * sizeof(float));
+    //float* distances_sorted_CPU = (float*)malloc(N * sizeof(float));
     auto indices_sorted_CPU_vec = new std::vector<float>();
 
 
@@ -354,16 +368,16 @@ int main() {
     checkCudaErrors(cudaEventRecord(start1));
 
     // Compute distances between current query point and data input
-    euclidean_distance_kernel << <(N + BLOCK_SIZE_DIS - 1) / BLOCK_SIZE_DIS, BLOCK_SIZE_DIS >> > 
-    (d_distances_merge, d_input, d_query, D, N);
+    euclidean_distance_kernel << <(N + BLOCK_SIZE_DIS - 1) / BLOCK_SIZE_DIS, BLOCK_SIZE_DIS >> >
+        (d_distances_merge, d_input, d_query, D, N);
 
     // Sort distances and indices
     int blocks_merge = (N + BLOCK_SIZE_KNN - 1) / BLOCK_SIZE_KNN / 2;
     int sortedsize = BLOCK_SIZE_KNN;
     while (blocks_merge > 0) {
-        mergeBlocks_kernel << <blocks_merge, 1 >> > (d_indices, d_distances_merge, d_ind_temp, d_dis_temp, sortedsize);
+        mergeBlocks_kernel << <blocks_merge, 1 >> > (d_indices_merge, d_distances_merge, d_ind_temp, d_dis_temp, sortedsize);
         cudaMemcpy(d_distances_merge, d_dis_temp, N * sizeof(float), cudaMemcpyDeviceToDevice);
-        cudaMemcpy(d_indices, d_ind_temp, N * sizeof(int), cudaMemcpyDeviceToDevice);
+        cudaMemcpy(d_indices_merge, d_ind_temp, N * sizeof(int), cudaMemcpyDeviceToDevice);
         blocks_merge /= 2;
         sortedsize *= 2;
     }
@@ -371,7 +385,7 @@ int main() {
     checkCudaErrors(cudaEventRecord(stop1));
 
     // Copy sorted distances and indices to host memory
-    cudaMemcpy(indices_sorted, d_indices, N * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(indices_sorted_merge, d_indices_merge, N * sizeof(int), cudaMemcpyDeviceToHost);
     cudaMemcpy(distances_sorted_merge, d_distances_merge, N * sizeof(float), cudaMemcpyDeviceToHost);
 
     //    std::vector<float> distances_sorted_vec_GPU(distances_sorted, distances_sorted + N);
@@ -387,21 +401,21 @@ int main() {
 
 
     // Compute distances between current query point and data input
-    euclidean_distance_kernel << <(N + BLOCK_SIZE_DIS - 1) / BLOCK_SIZE_DIS, BLOCK_SIZE_DIS >> > 
-    (d_distances_bitonic, d_input, d_query, D, N);
+    euclidean_distance_kernel << <(N + BLOCK_SIZE_DIS - 1) / BLOCK_SIZE_DIS, BLOCK_SIZE_DIS >> >
+        (d_distances_bitonic, d_input, d_query, D, N);
 
     int threads = 1024;
     int blocks_bitonic = (N + threads - 1) / threads;
     for (int k = 2; k <= N; k <<= 1) {
         for (int j = k >> 1; j > 0; j = j >> 1) {
-            Bitonic_Sort_kernel << <blocks_bitonic, threads >> > (d_distances_bitonic, k, j, N);
+            Bitonic_Sort_kernel << <blocks_bitonic, threads >> > (d_distances_bitonic, d_indices_bitonic, k, j, N);
         }
     }
 
     checkCudaErrors(cudaEventRecord(stop2));
 
     // Copy sorted distances and indices to host memory
-    //cudaMemcpy(indices_sorted, d_indices, N * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(indices_sorted_bitonic, d_indices_bitonic, N * sizeof(int), cudaMemcpyDeviceToHost);
     cudaMemcpy(distances_sorted_bitonic, d_distances_bitonic, N * sizeof(float), cudaMemcpyDeviceToHost);
 
     //    std::vector<float> distances_sorted_vec_GPU(distances_sorted, distances_sorted + N);
@@ -409,14 +423,14 @@ int main() {
     checkCudaErrors(cudaEventSynchronize(stop2));
 
 
-    printf("============== GPU ==============\n\n");
-
     // Print query point
     printf("Query point : ");
     for (int i = 0; i < D; i++) {
         printf("%f ", data_query[i]);
     }
     printf("\n\n");
+
+    printf("============== GPU ==============\n\n");
 
     // Compute and print kernel execution time for merge sort
     float kernel_time1;
@@ -428,7 +442,7 @@ int main() {
     // Print sorted indices and distances
     printf("Find the indices of K nearest neighbors(GPU, merge) : \n");
     for (int j = 0; j < K; j++) {
-        printf("%d ", indices_sorted[j]);
+        printf("%d ", indices_sorted_merge[j]);
     }
     printf("\n\n");
 
@@ -438,10 +452,19 @@ int main() {
     }
     printf("\n\n");
 
+    printf("---------------------------------\n\n");
+
     // Compute and print kernel execution time for bitonic sort
     float kernel_time2;
     checkCudaErrors(cudaEventElapsedTime(&kernel_time2, start2, stop2));
     printf("Kernel execution time of bitonic sort\t\t\t: %f ms\n\n", kernel_time2);
+
+    // Print sorted indices and distances
+    printf("Find the indices of K nearest neighbors(GPU, bitonic) : \n");
+    for (int j = 0; j < K; j++) {
+        printf("%d ", indices_sorted_bitonic[j]);
+    }
+    printf("\n\n");
 
     printf("Find the distances of K nearest neighbors(GPU, bitonic) : \n");
     for (int j = 0; j < K; j++) {
@@ -453,8 +476,8 @@ int main() {
     /*============== CPU functions ==============*/
 
     auto started = std::chrono::high_resolution_clock::now();
-    auto indices_sorted_CPU = new std::vector<std::pair<std::vector<float>, float>>();
-    knn_cpu(indices_sorted_CPU, data_input_vec, data_query_vec);
+    auto distances_sorted_CPU = new std::vector<std::pair<std::vector<float>, float>>();
+    knn_cpu(distances_sorted_CPU, data_input_vec, data_query_vec);
 
     auto stopped = std::chrono::high_resolution_clock::now();
 
@@ -463,7 +486,7 @@ int main() {
     printf("============== CPU ==============\n\n");
 
     std::chrono::duration<double, std::milli> elapsed = stopped - started;
-    std::cout << "CPU execution time\t\t\t:" << elapsed.count() << "\n\n";
+    std::cout << "CPU execution time\t\t\t:" << elapsed.count() << " ms\n\n";
 
     // Print sorted indices and distances
 //    printf("Find the indices of K nearest neighbors(CPU) : \n");
@@ -474,7 +497,7 @@ int main() {
 
     printf("Find the distances of K nearest neighbors(CPU) : \n");
     for (int j = 0; j < K; j++) {
-        printf("%f ", indices_sorted_CPU->at(j).second);
+        printf("%f ", distances_sorted_CPU->at(j).second);
     }
     printf("\n\n");
     //
@@ -489,7 +512,9 @@ int main() {
     // Free memory
     free(data_input);
     free(data_query);
-    free(indices_sorted);
+    //free(indices_sorted);
+    free(indices_sorted_merge);
+    free(indices_sorted_bitonic);
     //free(distances_sorted);
     free(distances_sorted_merge);
     free(distances_sorted_bitonic);
@@ -504,7 +529,8 @@ int main() {
     //cudaFree(d_distances);
     cudaFree(d_distances_merge);
     cudaFree(d_distances_bitonic);
-    cudaFree(d_indices);
+    cudaFree(d_indices_merge);
+    cudaFree(d_indices_bitonic);
 
     return 0;
 }
