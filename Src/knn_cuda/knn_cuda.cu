@@ -213,14 +213,20 @@ float euclidean_distance_cpu(std::vector<float>& vec1, std::vector<float>& vec2)
  * This CPU function implements sorting the distances and indices.
  *
  */
-void knn_cpu(std::vector<std::pair<std::vector<float>, float>>* distances, std::vector<std::vector<float>>& trainSet, std::vector<float>& queryData) {
+void knn_cpu(std::vector<std::pair<std::vector<float>, float>>* distances, std::vector<std::vector<float>>& trainSet, std::vector<float>& queryData, std::vector<std::pair<float, int>>* indice_sorted) {
+    int index = 0;
     for (auto j : trainSet) {
         distances->push_back(std::make_pair(j, euclidean_distance_cpu(queryData, j)));
+        indice_sorted->push_back(std::make_pair( euclidean_distance_cpu(queryData, j), index));
+        index++;
     }
 
     std::sort(distances->begin(), distances->end(), [](const std::pair<std::vector<float>, float>& p1, const std::pair<std::vector<float>, float>& p2) {
         return p1.second < p2.second;
         });
+    std::sort(indice_sorted->begin(), indice_sorted->end(), [](const std::pair<float, int>& p1, const std::pair< float, int>& p2) {
+        return p1.first < p2.first;
+    });
 }
 
 /**
@@ -490,7 +496,8 @@ int main() {
 
     auto started = std::chrono::high_resolution_clock::now();
     auto distances_sorted_CPU = new std::vector<std::pair<std::vector<float>, float>>();
-    knn_cpu(distances_sorted_CPU, data_input_vec, data_query_vec);
+    auto indices_sorted_CPU = new std::vector<std::pair<float, int>>();
+    knn_cpu(distances_sorted_CPU, data_input_vec, data_query_vec, indices_sorted_CPU);
 
     auto stopped = std::chrono::high_resolution_clock::now();
 
@@ -502,10 +509,10 @@ int main() {
     std::cout << "CPU execution time\t\t\t:" << elapsed.count() << " ms\n\n";
 
     // Print sorted indices and distances
-//    printf("Find the indices of K nearest neighbors(CPU) : \n");
-//    for (int j = 0; j < K; j++) {
-//        printf("%f ", indices_sorted_CPU->at(j).second);
-//    }
+    printf("Find the indices of K nearest neighbors(CPU) : \n");
+    for (int j = 0; j < K; j++) {
+        printf("%d ", indices_sorted_CPU->at(j).second);
+    }
     printf("\n\n");
 
     printf("Find the distances of K nearest neighbors(CPU) : \n");
