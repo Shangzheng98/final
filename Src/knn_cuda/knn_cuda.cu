@@ -8,7 +8,8 @@
 #define D 8 // dimension of each data point
 #define K 5 // number of nearest neighbors
 #define BLOCK_SIZE_DIS 8 // number of threads per block for distance calculation
-#define BLOCK_SIZE_KNN 1 // number of threads per block for knn calculation
+#define BLOCK_SIZE_MERGE 1 // number of threads per block for merge sort
+#define BLOCK_SIZE_BITONIC 1024 // number of threads per block for bitonic sort
 
 
 //--------------------------------------------------------------------------------------//
@@ -68,37 +69,45 @@ __global__ void mergeBlocks_kernel(int* indices, float* distances, int* ind_temp
 
     //pesudo index for indices
     //let the indices divide and merge like distances
-    int index1_ind = index1;
-    int endIndex1_ind = endIndex1;
-    int index2_ind = index2;
-    int endIndex2_ind = endIndex2;
-    int targetIndex_ind = targetIndex;
+    //int index1_ind = index1;
+    //int endIndex1_ind = endIndex1;
+    //int index2_ind = index2;
+    //int endIndex2_ind = endIndex2;
+    //int targetIndex_ind = targetIndex;
 
     int done = 0;
     while (!done)
     {
-        //if the first block is not finished and the second block is not finished
+        //if the first block is finished and the second block is not finished
         if ((index1 == endIndex1) && (index2 < endIndex2)) {
-            dis_temp[targetIndex++] = distances[index2++];
-            ind_temp[targetIndex_ind++] = indices[index2_ind++];
+            dis_temp[targetIndex] = distances[index2];
+            ind_temp[targetIndex] = indices[index2];
+            targetIndex++;
+            index2++;
         }
 
         //if the second block is finished and the first block is not finished
         else if ((index2 == endIndex2) && (index1 < endIndex1)) {
-            dis_temp[targetIndex++] = distances[index1++];
-            ind_temp[targetIndex_ind++] = indices[index1_ind++];
+            dis_temp[targetIndex] = distances[index1];
+            ind_temp[targetIndex] = indices[index1];
+            targetIndex++;
+            index1++;
         }
 
         //if the first block is smaller than the second block
         else if (distances[index1] < distances[index2]) {
-            dis_temp[targetIndex++] = distances[index1++];
-            ind_temp[targetIndex_ind++] = indices[index1_ind++];
+            dis_temp[targetIndex] = distances[index1];
+            ind_temp[targetIndex] = indices[index1];
+            targetIndex++;
+            index1++;
         }
 
         //else
         else {
-            dis_temp[targetIndex++] = distances[index2++];
-            ind_temp[targetIndex_ind++] = indices[index2_ind++];
+            dis_temp[targetIndex] = distances[index2];
+            ind_temp[targetIndex] = indices[index2];
+            targetIndex++;
+            index2++;
         }
 
         //if both blocks are finished, merge done.
@@ -372,8 +381,8 @@ int main() {
         (d_distances_merge, d_input, d_query, D, N);
 
     // Sort distances and indices
-    int blocks_merge = (N + BLOCK_SIZE_KNN - 1) / BLOCK_SIZE_KNN / 2;
-    int sortedsize = BLOCK_SIZE_KNN;
+    int blocks_merge = (N + BLOCK_SIZE_MERGE - 1) / BLOCK_SIZE_MERGE / 2;
+    int sortedsize = BLOCK_SIZE_MERGE;
     while (blocks_merge > 0) {
         mergeBlocks_kernel << <blocks_merge, 1 >> > (d_indices_merge, d_distances_merge, d_ind_temp, d_dis_temp, sortedsize);
         cudaMemcpy(d_distances_merge, d_dis_temp, N * sizeof(float), cudaMemcpyDeviceToDevice);
@@ -404,11 +413,10 @@ int main() {
     euclidean_distance_kernel << <(N + BLOCK_SIZE_DIS - 1) / BLOCK_SIZE_DIS, BLOCK_SIZE_DIS >> >
         (d_distances_bitonic, d_input, d_query, D, N);
 
-    int threads = 1024;
-    int blocks_bitonic = (N + threads - 1) / threads;
+    int blocks_bitonic = (N + BLOCK_SIZE_BITONIC - 1) / BLOCK_SIZE_BITONIC;
     for (int k = 2; k <= N; k <<= 1) {
         for (int j = k >> 1; j > 0; j = j >> 1) {
-            Bitonic_Sort_kernel << <blocks_bitonic, threads >> > (d_distances_bitonic, d_indices_bitonic, k, j, N);
+            Bitonic_Sort_kernel << <blocks_bitonic, BLOCK_SIZE_BITONIC >> > (d_distances_bitonic, d_indices_bitonic, k, j, N);
         }
     }
 
@@ -422,12 +430,17 @@ int main() {
 
     checkCudaErrors(cudaEventSynchronize(stop2));
 
-
+    printf("============ Settings ============\n\n");
     // Print query point
     printf("Query point : ");
     for (int i = 0; i < D; i++) {
         printf("%f ", data_query[i]);
     }
+    printf("\n\n");
+
+    printf("number of data points : %d\n", N);
+    printf("number of dimensions : %d\n", D);
+    printf("number of K : %d\n", K);
     printf("\n\n");
 
     printf("============== GPU ==============\n\n");
