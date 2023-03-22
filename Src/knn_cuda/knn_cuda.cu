@@ -57,14 +57,14 @@ __global__ void euclidean_distance_kernel(float* distances, float* data_input, f
  * @NOTE: The number of threads per block must be 1. And the total number of the data points must be a power of 2.
  */
 __global__ void mergeBlocks_kernel(int* indices, float* distances, int* ind_temp, float* dis_temp, int sortedsize) {
-    int id = blockIdx.x;
+    int idx = blockIdx.x;
 
     //index for distances
-    int index1 = id * 2 * sortedsize;
+    int index1 = idx * 2 * sortedsize;
     int endIndex1 = index1 + sortedsize;
     int index2 = endIndex1;
     int endIndex2 = index2 + sortedsize;
-    int targetIndex = id * 2 * sortedsize;
+    int targetIndex = idx * 2 * sortedsize;
 
     //pesudo index for indices
     //let the indices divide and merge like distances
