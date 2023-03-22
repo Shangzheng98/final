@@ -10,33 +10,6 @@
 #define BLOCK_SIZE_DIS 8 // number of threads per block for distance calculation
 #define BLOCK_SIZE_KNN 1 // number of threads per block for knn calculation
 
-class Timer {
-public:
-    Timer() {
-        stopped = started = std::chrono::high_resolution_clock::now();
-    };
-
-    Timer& start() {
-        started = std::chrono::high_resolution_clock::now();
-        return *this;
-    }
-
-    Timer& stop() {
-        stopped = std::chrono::high_resolution_clock::now();
-        return *this;
-    }
-
-    double elapsed() {
-        if (started != stopped) {
-            std::chrono::duration<double> elapsed = stopped - started;
-            return elapsed.count();
-        }
-        return 0.0;
-    }
-
-    std::chrono::time_point<std::chrono::high_resolution_clock> started;
-    std::chrono::time_point<std::chrono::high_resolution_clock> stopped;
-};
 
 //--------------------------------------------------------------------------------------//
 //                                     CUDA Kernels                                     //
@@ -218,8 +191,7 @@ float euclidean_distance_cpu(std::vector<float>& vec1, std::vector<float>& vec2)
 }
 
 /**
- * want some CPU function to find the k nearest neighbors
- * to compare running time with the GPU function in the main function
+ * This CPU function implements sorting the distances and indices.
  *
  */
 void knn_cpu(std::vector<std::pair<std::vector<float>, float>>* distances, std::vector<std::vector<float>>& trainSet, std::vector<float>& queryData) {
@@ -232,15 +204,47 @@ void knn_cpu(std::vector<std::pair<std::vector<float>, float>>* distances, std::
         });
 }
 
+/**
+ *This is a C++ class called "Timer" that allows timing of program execution.
+ *It uses the <chrono> library to measure time with high resolution clock.
+ *
+ */
+class Timer {
+public:
+    Timer() {
+        stopped = started = std::chrono::high_resolution_clock::now();
+    };
+
+    Timer& start() {
+        started = std::chrono::high_resolution_clock::now();
+        return *this;
+    }
+
+    Timer& stop() {
+        stopped = std::chrono::high_resolution_clock::now();
+        return *this;
+    }
+
+    double elapsed() {
+        if (started != stopped) {
+            std::chrono::duration<double> elapsed = stopped - started;
+            return elapsed.count();
+        }
+        return 0.0;
+    }
+
+    std::chrono::time_point<std::chrono::high_resolution_clock> started;
+    std::chrono::time_point<std::chrono::high_resolution_clock> stopped;
+};
+
 //--------------------------------------------------------------------------------------//
-//                                     main function                                    //
+//                                     Main function                                    //
 //--------------------------------------------------------------------------------------//
 
 
 /**
  * main function to see if GPU and CPU functions work and compare running time
  */
-
 int main() {
 
     /*============== Initialize and Memory Allocated ==============*/
@@ -249,27 +253,29 @@ int main() {
     float* data_input;
     data_input = (float*)malloc(N * D * sizeof(float));
 
-
-
     // (HOST) Initialize data input
     for (int i = 0; i < N * D; i++) {
         data_input[i] = (float)rand() / (float)RAND_MAX;
     }
+
+    // (HOST) Convert data_input to vector for CPU computation
     std::vector<std::vector<float> > data_input_vec(N, std::vector<float>(D));
     for (int i = 0; i < N * D; i++) {
         data_input_vec[i / D][i % D] = data_input[i];
     }
-    //    std::vector<float> data_input_vec(data_input, data_input + N * D);
-        /*
-        //using this to test if distance is calculated correctly and if the sorting works
-        for (int i = 0; i < N; i++) {
-            for (int j = 0; j < D; j++) {
-                data_input[i * D + j] = i+1;
-            }
-        }
-        */
 
-        // (HOST) Define and allocate memory for query data
+    /*
+    //using this to test if distance is calculated correctly and if the sorting works
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < D; j++) {
+            data_input[i * D + j] = i+1;
+        }
+    }
+
+    std::vector<float> data_input_vec(data_input, data_input + N * D);
+    */
+
+    // (HOST) Define and allocate memory for query data
     float* data_query;
     data_query = (float*)malloc(D * sizeof(float));
 
@@ -277,6 +283,8 @@ int main() {
     for (int i = 0; i < D; i++) {
         data_query[i] = (float)rand() / (float)RAND_MAX;
     }
+
+    // (HOST) Convert data_query to vector for CPU computation
     std::vector<float> data_query_vec(data_query, data_query + D);
 
     /*
@@ -338,6 +346,7 @@ int main() {
 
     /*============== GPU functions ==============*/
 
+    /*-----Merge Sort-----*/
     cudaEvent_t start1, stop1;
     checkCudaErrors(cudaEventCreate(&start1));
     checkCudaErrors(cudaEventCreate(&stop1));
@@ -345,9 +354,8 @@ int main() {
     checkCudaErrors(cudaEventRecord(start1));
 
     // Compute distances between current query point and data input
-    euclidean_distance_kernel << <(N + BLOCK_SIZE_DIS - 1) / BLOCK_SIZE_DIS, BLOCK_SIZE_DIS >> > (d_distances_merge, d_input,
-        d_query, D, N);
-
+    euclidean_distance_kernel << <(N + BLOCK_SIZE_DIS - 1) / BLOCK_SIZE_DIS, BLOCK_SIZE_DIS >> > 
+    (d_distances_merge, d_input, d_query, D, N);
 
     // Sort distances and indices
     int blocks_merge = (N + BLOCK_SIZE_KNN - 1) / BLOCK_SIZE_KNN / 2;
@@ -361,6 +369,7 @@ int main() {
     }
 
     checkCudaErrors(cudaEventRecord(stop1));
+
     // Copy sorted distances and indices to host memory
     cudaMemcpy(indices_sorted, d_indices, N * sizeof(int), cudaMemcpyDeviceToHost);
     cudaMemcpy(distances_sorted_merge, d_distances_merge, N * sizeof(float), cudaMemcpyDeviceToHost);
@@ -369,10 +378,7 @@ int main() {
 
     checkCudaErrors(cudaEventSynchronize(stop1));
 
-
-
-
-
+    /*-----Bitonic Sort-----*/
     cudaEvent_t start2, stop2;
     checkCudaErrors(cudaEventCreate(&start2));
     checkCudaErrors(cudaEventCreate(&stop2));
@@ -381,9 +387,8 @@ int main() {
 
 
     // Compute distances between current query point and data input
-    euclidean_distance_kernel << <(N + BLOCK_SIZE_DIS - 1) / BLOCK_SIZE_DIS, BLOCK_SIZE_DIS >> > (d_distances_bitonic, d_input,
-        d_query, D, N);
-
+    euclidean_distance_kernel << <(N + BLOCK_SIZE_DIS - 1) / BLOCK_SIZE_DIS, BLOCK_SIZE_DIS >> > 
+    (d_distances_bitonic, d_input, d_query, D, N);
 
     int threads = 1024;
     int blocks_bitonic = (N + threads - 1) / threads;
@@ -394,6 +399,7 @@ int main() {
     }
 
     checkCudaErrors(cudaEventRecord(stop2));
+
     // Copy sorted distances and indices to host memory
     //cudaMemcpy(indices_sorted, d_indices, N * sizeof(int), cudaMemcpyDeviceToHost);
     cudaMemcpy(distances_sorted_bitonic, d_distances_bitonic, N * sizeof(float), cudaMemcpyDeviceToHost);
@@ -401,9 +407,6 @@ int main() {
     //    std::vector<float> distances_sorted_vec_GPU(distances_sorted, distances_sorted + N);
 
     checkCudaErrors(cudaEventSynchronize(stop2));
-    //checkCudaErrors(cudaEventDestroy(start2));
-    //checkCudaErrors(cudaEventDestroy(stop2));
-
 
 
     printf("============== GPU ==============\n\n");
@@ -415,7 +418,7 @@ int main() {
     }
     printf("\n\n");
 
-    // Compute and print kernel execution time
+    // Compute and print kernel execution time for merge sort
     float kernel_time1;
     checkCudaErrors(cudaEventElapsedTime(&kernel_time1, start1, stop1));
     printf("Kernel execution time of merge sort\t\t\t: %f ms\n\n", kernel_time1);
@@ -435,7 +438,7 @@ int main() {
     }
     printf("\n\n");
 
-    // Compute and print kernel execution time
+    // Compute and print kernel execution time for bitonic sort
     float kernel_time2;
     checkCudaErrors(cudaEventElapsedTime(&kernel_time2, start2, stop2));
     printf("Kernel execution time of bitonic sort\t\t\t: %f ms\n\n", kernel_time2);
@@ -449,9 +452,6 @@ int main() {
 
     /*============== CPU functions ==============*/
 
-    // this knn_cpu function is not working properly
-    // and i'm thinking to use different sorting algorithm on CPU to compare with GPU
-    //  merge sort is necessary, we can add more sorting algorithm to compare
     auto started = std::chrono::high_resolution_clock::now();
     auto indices_sorted_CPU = new std::vector<std::pair<std::vector<float>, float>>();
     knn_cpu(indices_sorted_CPU, data_input_vec, data_query_vec);
@@ -460,8 +460,6 @@ int main() {
 
     /*============== Compare result ==============*/
 
-//    QueryPerformanceCounter(&end_time);
-//
     printf("============== CPU ==============\n\n");
 
     std::chrono::duration<double, std::milli> elapsed = stopped - started;
@@ -496,7 +494,7 @@ int main() {
     free(distances_sorted_merge);
     free(distances_sorted_bitonic);
     free(distances_sorted_CPU);
-    //    free(indices_sorted_CPU);
+    //free(indices_sorted_CPU);
     free(indices);
     //free(distances_unsorted);
     cudaFree(d_dis_temp);
