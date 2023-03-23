@@ -4,10 +4,10 @@
 #include <helper_functions.h>
 #include <helper_cuda.h>
 #include <chrono>
-#define N 262144 // number of data points
-#define D 8 // dimension of each data point
+#define N 200000 // number of data points
+#define D 10// dimension of each data point
 #define K 5 // number of nearest neighbors
-#define BLOCK_SIZE_DIS 8 // number of threads per block for distance calculation
+#define BLOCK_SIZE_DIS 32 // number of threads per block for distance calculation
 #define BLOCK_SIZE_MERGE 1 // number of threads per block for merge sort
 #define BLOCK_SIZE_BITONIC 1024 // number of threads per block for bitonic sort
 
